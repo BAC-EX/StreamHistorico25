@@ -5,9 +5,57 @@ import io
 import datetime
 
 # 🧭 Configuración de página
-st.set_page_config(page_title="Ejemplo Pandas + Streamlit", page_icon="📊", layout="centered")
-st.title("📈 Ejemplo con gestión de memoria optimizada")
+logo_vesta = "https://greatplacetoworkcarca.com/wp-content/uploads/2023/11/Logo-Vesta-Customs-Honduras.png"
+st.markdown(
+    f"""
+    <style>
+        .top-right-image {{
+            position: fixed;
+            top: 62px;
+            right: 20px;
+            width: 120px;  /* Ajusta tamaño */
+            z-index: 9999; /* Para que quede encima */
+        }}
+    </style>
+    <img src="{logo_vesta}" class="top-right-image">
+    """,
+    unsafe_allow_html=True
+)
+st.set_page_config(page_title="25 + Historico", page_icon="📊", layout="centered")
+st.title("📈 25 + Historico")
+st.markdown(
+    """
+    <style>
+    /* Fondo de la sidebar */
+    [data-testid="stSidebar"] > div:first-child {
+        background-color: #dce3e0 !important;
+    }
 
+    /* Texto dentro de la sidebar para asegurar contraste */
+    [data-testid="stSidebar"] * {
+        color: #000000 !important;
+    }
+
+    /* Opcional: ajustar color de inputs/selecciones si hace falta */
+    [data-testid="stSidebar"] .stSelectbox, 
+    [data-testid="stSidebar"] .stMultiselect,
+    [data-testid="stSidebar"] .stDateInput,
+    [data-testid="stSidebar"] .stRadio {
+        color: #000000 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+st.sidebar.markdown(
+    f"""
+    <div style="text-align:center;">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/6/63/CargillLogo.svg/330px-CargillLogo.svg.png"
+             width="180">
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 # 🧠 Cargar datos una sola vez
 @st.cache_data
 def load_data():
@@ -22,26 +70,25 @@ df = load_data()
 df["Payment date"] = pd.to_datetime(df["Payment date"], errors="coerce")
 df["Clearance date"] = pd.to_datetime(df["Clearance date"], errors="coerce")
 
-# 🔹 Filtros (no fecha)
+# 🔹 Filtros (no fecha) — en sidebar
 values_business = df["Business"].unique().tolist()
 values_decl = df["Declaration number"].unique().tolist()
 values_po = df["PO"].unique().tolist()
 values_trade = df["Trade Flow"].unique().tolist()
 
-# 🎛️ Selectores Streamlit (no fecha)
-f_business = st.multiselect("Business", values_business)
-f_decl = st.multiselect("Declaration Number", values_decl)
-f_po = st.multiselect("PO", values_po)
-f_trade = st.multiselect("Trade Flow", values_trade)
+f_business = st.sidebar.multiselect("Business", values_business, key="business_multiselect")
+f_decl = st.sidebar.multiselect("Declaration Number", values_decl, key="decl_multiselect")
+f_po = st.sidebar.multiselect("PO", values_po, key="po_multiselect")
+f_trade = st.sidebar.multiselect("Trade Flow", values_trade, key="trade_multiselect")
 
 # --- Helpers para filtros de fecha ---
-def date_filter_widget(label: str, series: pd.Series):
-    """Muestra UI para filtrar una columna de fecha. Devuelve una máscara booleana."""
+def date_filter_widget(label: str, series: pd.Series, container=st.sidebar):
+    """Muestra UI para filtrar una columna de fecha en el container indicado (sidebar por defecto). Devuelve una máscara booleana."""
     series = pd.to_datetime(series, errors="coerce")
     min_date = series.min().date() if series.notna().any() else datetime.date.today()
     max_date = series.max().date() if series.notna().any() else datetime.date.today()
 
-    mode = st.radio(
+    mode = container.radio(
         f"Filtrar {label} por:",
         ["Multiselección", "Rango de fechas", "Mes", "Año"],
         horizontal=True,
@@ -52,16 +99,14 @@ def date_filter_widget(label: str, series: pd.Series):
     start_date = end_date = None
 
     if mode == "Multiselección":
-        # Mostrar las fechas disponibles como lista de fechas (date objects) para multiselect
         options = sorted(series.dropna().dt.date.unique().tolist())
-        sel = st.multiselect(f"{label} (fechas)", options, key=f"{label}_multiselect")
+        sel = container.multiselect(f"{label} (fechas)", options, key=f"{label}_multiselect")
         if sel:
             sel_ts = [pd.Timestamp(d) for d in sel]
             mask &= series.isin(sel_ts)
 
     elif mode == "Rango de fechas":
-        # Mostrar siempre el selector de rango de fechas (sin checkbox)
-        range_val = st.date_input(
+        range_val = container.date_input(
             f"Selecciona rango de fechas para {label}",
             value=(min_date, max_date),
             min_value=min_date,
@@ -69,26 +114,24 @@ def date_filter_widget(label: str, series: pd.Series):
             key=f"{label}_range"
         )
 
-        # Evitar ValueError cuando el widget devuelve una sola fecha (usuario aún no seleccionó la segunda)
         if isinstance(range_val, tuple) and len(range_val) == 2:
             start, end = range_val
-            # normalizar orden
             if start > end:
                 start, end = end, start
             start_date, end_date = start, end
             mask &= (series >= pd.Timestamp(start_date)) & (series <= pd.Timestamp(end_date))
         else:
-            st.info("Cargando... termina de seleccionar la segunda fecha para aplicar el filtro")
+            container.info("Cargando... termina de seleccionar la segunda fecha para aplicar el filtro")
 
     elif mode == "Mes":
         years = sorted(series.dropna().dt.year.unique().tolist())
         if not years:
-            st.write(f"No hay fechas disponibles en {label}")
+            container.write(f"No hay fechas disponibles en {label}")
         else:
-            year_start = st.selectbox("Año inicio", years, key=f"{label}_mes_ys")
-            month_start = st.selectbox("Mes inicio", range(1, 13), format_func=lambda x: datetime.date(1900, x, 1).strftime("%B"), key=f"{label}_mes_ms")
-            year_end = st.selectbox("Año fin", years, key=f"{label}_mes_ye")
-            month_end = st.selectbox("Mes fin", range(1, 13), format_func=lambda x: datetime.date(1900, x, 1).strftime("%B"), key=f"{label}_mes_me")
+            year_start = container.selectbox("Año inicio", years, key=f"{label}_mes_ys")
+            month_start = container.selectbox("Mes inicio", range(1, 13), format_func=lambda x: datetime.date(1900, x, 1).strftime("%B"), key=f"{label}_mes_ms")
+            year_end = container.selectbox("Año fin", years, key=f"{label}_mes_ye")
+            month_end = container.selectbox("Mes fin", range(1, 13), format_func=lambda x: datetime.date(1900, x, 1).strftime("%B"), key=f"{label}_mes_me")
 
             start_date = datetime.date(year_start, month_start, 1)
             if month_end == 12:
@@ -101,23 +144,23 @@ def date_filter_widget(label: str, series: pd.Series):
     elif mode == "Año":
         years = sorted(series.dropna().dt.year.unique().tolist())
         if not years:
-            st.write(f"No hay fechas disponibles en {label}")
+            container.write(f"No hay fechas disponibles en {label}")
         else:
-            year_start = st.selectbox("Año inicio", years, key=f"{label}_anio_ys")
-            year_end = st.selectbox("Año fin", years, key=f"{label}_anio_ye")
+            year_start = container.selectbox("Año inicio", years, key=f"{label}_anio_ys")
+            year_end = container.selectbox("Año fin", years, key=f"{label}_anio_ye")
             start_date = datetime.date(year_start, 1, 1)
             end_date = datetime.date(year_end, 12, 31)
             mask &= (series >= pd.Timestamp(start_date)) & (series <= pd.Timestamp(end_date))
 
     if start_date is not None and end_date is not None:
-        st.write(f"📅 Rango aplicado en {label}: {start_date} → {end_date}")
+        container.write(f"📅 Rango aplicado en {label}: {start_date} → {end_date}")
 
     return mask
 
-# 🗓️ Widgets de filtro para Payment date y Clearance date (mejora)
-st.markdown("### Filtros por fecha")
-mask_payment = date_filter_widget("Payment date", df["Payment date"])
-mask_clearance = date_filter_widget("Clearance date", df["Clearance date"])
+# 🗓️ Widgets de filtro para Payment date y Clearance date en sidebar
+st.sidebar.markdown("### Filtros por fecha")
+mask_payment = date_filter_widget("Payment date", df["Payment date"], container=st.sidebar)
+mask_clearance = date_filter_widget("Clearance date", df["Clearance date"], container=st.sidebar)
 
 # 🧮 Filtrado eficiente combinando todo
 mask = pd.Series(True, index=df.index)
@@ -130,7 +173,6 @@ if f_po:
 if f_trade:
     mask &= df["Trade Flow"].isin(f_trade)
 
-# aplicar máscaras de fecha calculadas por los widgets
 mask &= mask_payment
 mask &= mask_clearance
 
@@ -145,7 +187,6 @@ st.dataframe(df_filtrado, use_container_width=True)
 def convertir_excel(df: pd.DataFrame) -> bytes:
     """Convierte un DataFrame a Excel de forma eficiente y cacheada."""
     buffer = io.BytesIO()
-    # xlsxwriter suele usar menos memoria que openpyxl
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False)
     return buffer.getvalue()
@@ -153,7 +194,7 @@ def convertir_excel(df: pd.DataFrame) -> bytes:
 # 💾 Crear archivo Excel
 excel_bytes = convertir_excel(df_filtrado)
 
-# 📥 Botón de descarga (sin mantener buffer en memoria)
+# 📥 Botón de descarga (en la página principal)
 st.download_button(
     label="⬇️ Descargar Excel",
     data=excel_bytes,
