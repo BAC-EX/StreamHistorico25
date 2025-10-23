@@ -5,6 +5,7 @@ import io
 import datetime
 
 # 🧭 Configuración de página
+st._config.set_option("theme.backgroundColor", "#FFFFFF")
 logo_vesta = "https://greatplacetoworkcarca.com/wp-content/uploads/2023/11/Logo-Vesta-Customs-Honduras.png"
 st.markdown(
     f"""
@@ -21,8 +22,8 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-st.set_page_config(page_title="25 + Historico", page_icon="📊", layout="centered")
-st.title("📈 25 + Historico")
+st.set_page_config(page_title="25 + Historico y 25 + Actual", page_icon="📊", layout="centered")
+st.title("📈 25 + Historico y 25 + Actual")
 st.markdown(
     """
     <style>
@@ -56,15 +57,59 @@ st.sidebar.markdown(
     """,
     unsafe_allow_html=True
 )
-# 🧠 Cargar datos una sola vez
-@st.cache_data
-def load_data():
-    url = "https://drive.google.com/uc?export=download&id=1FFvdV6rr5tv2wVuXX4PzEwANx66NsK0O"
-    response = requests.get(url)
-    df = pd.read_parquet(io.BytesIO(response.content))
-    return df
 
-df = load_data()
+# ----------------------
+# Fuentes de datos
+# ----------------------
+DATA_SOURCES = {
+    "Histórico": "https://drive.google.com/uc?export=download&id=1FFvdV6rr5tv2wVuXX4PzEwANx66NsK0O",
+    "Actual": "https://drive.google.com/uc?export=download&id=15FKCKV4nblqnVY-vgYbO7HSPm8BqxMBt"  # <- reemplaza aquí
+}
+
+source_choice = st.sidebar.radio("Fuente de datos", list(DATA_SOURCES.keys()), index=0)
+
+# 🧠 Cargar datos una sola vez, cacheada por URL
+@st.cache_data
+def load_data(url: str) -> pd.DataFrame:
+    """Descarga y detecta automáticamente el formato del archivo (parquet, excel, csv)."""
+    response = requests.get(url, stream=True)
+    content = response.content
+    bio = io.BytesIO(content)
+
+    # Intento 1: parquet
+    try:
+        bio.seek(0)
+        return pd.read_parquet(bio)
+    except Exception:
+        pass
+
+    # Intento 2: excel
+    try:
+        bio.seek(0)
+        return pd.read_excel(bio)
+    except Exception:
+        pass
+
+    # Intento 3: csv (intentar detectar encoding/sep de forma simple)
+    try:
+        text = content.decode("utf-8", errors="ignore")
+        # prefer comma unless semicolon appears more often
+        sep = "," if text.count(",") >= text.count(";") else ";"
+        from io import StringIO
+
+        return pd.read_csv(StringIO(text), sep=sep)
+    except Exception:
+        pass
+
+    # Si ninguno funcionó, mostrar información útil
+    ct = response.headers.get("content-type", "")
+    raise ValueError(
+        f"No se pudo parsear el contenido descargado desde {url}. "
+        f"Content-Type: {ct}. Asegúrate de que el enlace apunte directamente a un archivo parquet/xlsx/csv "
+        "o usar un enlace de descarga directa (Google Drive puede requerir confirmación de descarga para archivos grandes)."
+    )
+
+df = load_data(DATA_SOURCES[source_choice])
 
 # Asegurar que las columnas de fecha son datetime
 df["Payment date"] = pd.to_datetime(df["Payment date"], errors="coerce")
@@ -95,7 +140,7 @@ def date_filter_widget(label: str, series: pd.Series, container=st.sidebar):
         key=f"{label}_mode"
     )
 
-    mask = pd.Series(True, index=df.index)
+    mask = pd.Series(True, index=series.index)
     start_date = end_date = None
 
     if mode == "Multiselección":
@@ -179,6 +224,7 @@ mask &= mask_clearance
 df_filtrado = df[mask]
 
 # 📊 Mostrar resultados
+st.write(f"Fuente: {source_choice}")
 st.write(f"Filas mostradas: {len(df_filtrado):,}")
 st.dataframe(df_filtrado, use_container_width=True)
 
