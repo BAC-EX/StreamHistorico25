@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import requests
 import io
 import datetime
 
@@ -10,7 +11,10 @@ st.title("📈 Ejemplo con gestión de memoria optimizada")
 # 🧠 Cargar datos una sola vez
 @st.cache_data
 def load_data():
-    return pd.read_parquet("./data/25historico.parquet")
+    url = "https://drive.google.com/uc?export=download&id=1FFvdV6rr5tv2wVuXX4PzEwANx66NsK0O"
+    response = requests.get(url)
+    df = pd.read_parquet(io.BytesIO(response.content))
+    return df
 
 df = load_data()
 
