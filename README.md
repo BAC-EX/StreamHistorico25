@@ -1,2 +1,4 @@
 # StreamHistorico25
-Usable apra descargar historico de 25 +
+0.0.1 
+# Filtrado y transformacion de datos usando phyton, streamlit, panda y datetime
+- En este proyecto buscamos transformar y filtrar los datos de la tabla 25Historico, provenientes de la base de datos ReportesCargil, para ese proceso trabajamos con bibliotecas como panda, ya que trabajamos con data frames para la carga de los datos, tambien usamos el framework de streamlit que nos permitio convertir el proceso de filtrado y transformacion de datos en una aplicacion web mas interactiva y facil de usar, en este proceso utilizamos filtros para las columnas Business, Declaration Number, PO, Payment date, Clearance date, Trade Flow, donde el usuario puede seleccionar que tipo de filtro necesita para su datos, por ultimo añadimos rangos de fechas para el Payment date, y para el Clearance date, para realizar esta operacion trabajamos con la biblioteca datetime, asi el usuario puede seleccionar de que fecha a que fecha quiere filtrar sus datos sin ningun problema.
