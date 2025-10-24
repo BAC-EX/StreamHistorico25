@@ -4,7 +4,7 @@ import requests
 import io
 import datetime
 
-# 🧭 Configuración de página
+# Configuración de página
 st._config.set_option("theme.backgroundColor", "#FFFFFF")
 logo_vesta = "https://greatplacetoworkcarca.com/wp-content/uploads/2023/11/Logo-Vesta-Customs-Honduras.png"
 st.markdown(
@@ -63,12 +63,12 @@ st.sidebar.markdown(
 # ----------------------
 DATA_SOURCES = {
     "Histórico": "https://drive.google.com/uc?export=download&id=1FFvdV6rr5tv2wVuXX4PzEwANx66NsK0O",
-    "Actual": "https://drive.google.com/uc?export=download&id=15FKCKV4nblqnVY-vgYbO7HSPm8BqxMBt"  # <- reemplaza aquí
+    "Actual": "https://drive.google.com/uc?export=download&id=15FKCKV4nblqnVY-vgYbO7HSPm8BqxMBt"
 }
 
 source_choice = st.sidebar.radio("Fuente de datos", list(DATA_SOURCES.keys()), index=0)
 
-# 🧠 Cargar datos una sola vez, cacheada por URL
+# Cargar datos una sola vez, cacheada por URL
 @st.cache_data
 def load_data(url: str) -> pd.DataFrame:
     """Descarga y detecta automáticamente el formato del archivo (parquet, excel, csv)."""
@@ -90,52 +90,46 @@ def load_data(url: str) -> pd.DataFrame:
     except Exception:
         pass
 
-    # Intento 3: csv (intentar detectar encoding/sep de forma simple)
+    # Intento 3: csv
     try:
-        text = content.decode("utf-8", errors="ignore")
-        # prefer comma unless semicolon appears more often
-        sep = "," if text.count(",") >= text.count(";") else ";"
-        from io import StringIO
-
-        return pd.read_csv(StringIO(text), sep=sep)
+        bio.seek(0)
+        return pd.read_csv(bio)
     except Exception:
         pass
 
-    # Si ninguno funcionó, mostrar información útil
-    ct = response.headers.get("content-type", "")
-    raise ValueError(
-        f"No se pudo parsear el contenido descargado desde {url}. "
-        f"Content-Type: {ct}. Asegúrate de que el enlace apunte directamente a un archivo parquet/xlsx/csv "
-        "o usar un enlace de descarga directa (Google Drive puede requerir confirmación de descarga para archivos grandes)."
-    )
+    raise ValueError("No se pudo leer el archivo con pandas")
 
 df = load_data(DATA_SOURCES[source_choice])
 
-# Asegurar que las columnas de fecha son datetime
-df["Payment date"] = pd.to_datetime(df["Payment date"], errors="coerce")
-df["Clearance date"] = pd.to_datetime(df["Clearance date"], errors="coerce")
+# Asegurar que las columnas de fecha son datetime (si existen)
+if "Payment date" in df.columns:
+    df["Payment date"] = pd.to_datetime(df["Payment date"], errors="coerce")
+if "Clearance date" in df.columns:
+    df["Clearance date"] = pd.to_datetime(df["Clearance date"], errors="coerce")
 
-# 🔹 Filtros (no fecha) — en sidebar
-values_business = df["Business"].unique().tolist()
-values_decl = df["Declaration number"].unique().tolist()
-values_po = df["PO"].unique().tolist()
-values_trade = df["Trade Flow"].unique().tolist()
+# Helper para detectar columnas alternativas si fuera necesario (lista de candidatos)
+def first_existing_column(df: pd.DataFrame, candidates):
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
 
-f_business = st.sidebar.multiselect("Business", values_business, key="business_multiselect")
-f_decl = st.sidebar.multiselect("Declaration Number", values_decl, key="decl_multiselect")
-f_po = st.sidebar.multiselect("PO", values_po, key="po_multiselect")
-f_trade = st.sidebar.multiselect("Trade Flow", values_trade, key="trade_multiselect")
+def unique_values_for(df: pd.DataFrame, col_name):
+    if col_name and col_name in df.columns:
+        vals = df[col_name].dropna().unique().tolist()
+        return sorted(vals)
+    return []
 
-# --- Helpers para filtros de fecha ---
+# --- Helpers para filtros de fecha (misma implementación que en Histórico)
 def date_filter_widget(label: str, series: pd.Series, container=st.sidebar):
-    """Muestra UI para filtrar una columna de fecha en el container indicado (sidebar por defecto). Devuelve una máscara booleana."""
+    """Muestra UI para filtrar una columna de fecha con modos: Multiselección (meses/años) o Rango de fechas."""
     series = pd.to_datetime(series, errors="coerce")
     min_date = series.min().date() if series.notna().any() else datetime.date.today()
     max_date = series.max().date() if series.notna().any() else datetime.date.today()
 
     mode = container.radio(
         f"Filtrar {label} por:",
-        ["Multiselección", "Rango de fechas", "Mes", "Año"],
+        ["Multiselección", "Rango de fechas"],
         horizontal=True,
         key=f"{label}_mode"
     )
@@ -143,13 +137,46 @@ def date_filter_widget(label: str, series: pd.Series, container=st.sidebar):
     mask = pd.Series(True, index=series.index)
     start_date = end_date = None
 
+    # -----------------------
+    # 🔹 Modo 1: Multiselección (Meses y Años)
+    # -----------------------
     if mode == "Multiselección":
-        options = sorted(series.dropna().dt.date.unique().tolist())
-        sel = container.multiselect(f"{label} (fechas)", options, key=f"{label}_multiselect")
-        if sel:
-            sel_ts = [pd.Timestamp(d) for d in sel]
-            mask &= series.isin(sel_ts)
+        months_available = sorted(series.dropna().dt.month.unique().tolist())
+        years_available = sorted(series.dropna().dt.year.unique().tolist())
 
+        sel_months = container.multiselect(
+            f"Selecciona meses para {label}",
+            options=months_available,
+            format_func=lambda x: datetime.date(1900, x, 1).strftime("%B"),
+            key=f"{label}_multi_month"
+        )
+
+        sel_years = container.multiselect(
+            f"Selecciona años para {label}",
+            options=years_available,
+            key=f"{label}_multi_year"
+        )
+
+        if sel_months:
+            mask &= series.dt.month.isin(sel_months)
+        if sel_years:
+            mask &= series.dt.year.isin(sel_years)
+
+        if sel_months or sel_years:
+            meses_sel = [datetime.date(1900, m, 1).strftime("%B") for m in sel_months] if sel_months else []
+            años_sel = [str(y) for y in sel_years] if sel_years else []
+            texto = "📅 Filtro aplicado: "
+            if meses_sel:
+                texto += f"Meses ({', '.join(meses_sel)}) "
+            if años_sel:
+                texto += f"Años ({', '.join(años_sel)})"
+            container.write(texto)
+        else:
+            container.info("Selecciona uno o varios meses o años para aplicar el filtro.")
+
+    # -----------------------
+    # 🔹 Modo 2: Rango de fechas
+    # -----------------------
     elif mode == "Rango de fechas":
         range_val = container.date_input(
             f"Selecciona rango de fechas para {label}",
@@ -166,66 +193,185 @@ def date_filter_widget(label: str, series: pd.Series, container=st.sidebar):
             start_date, end_date = start, end
             mask &= (series >= pd.Timestamp(start_date)) & (series <= pd.Timestamp(end_date))
         else:
-            container.info("Cargando... termina de seleccionar la segunda fecha para aplicar el filtro")
+            container.info("Selecciona ambas fechas para aplicar el filtro.")
 
-    elif mode == "Mes":
-        years = sorted(series.dropna().dt.year.unique().tolist())
-        if not years:
-            container.write(f"No hay fechas disponibles en {label}")
-        else:
-            year_start = container.selectbox("Año inicio", years, key=f"{label}_mes_ys")
-            month_start = container.selectbox("Mes inicio", range(1, 13), format_func=lambda x: datetime.date(1900, x, 1).strftime("%B"), key=f"{label}_mes_ms")
-            year_end = container.selectbox("Año fin", years, key=f"{label}_mes_ye")
-            month_end = container.selectbox("Mes fin", range(1, 13), format_func=lambda x: datetime.date(1900, x, 1).strftime("%B"), key=f"{label}_mes_me")
-
-            start_date = datetime.date(year_start, month_start, 1)
-            if month_end == 12:
-                end_date = datetime.date(year_end + 1, 1, 1) - datetime.timedelta(days=1)
-            else:
-                end_date = datetime.date(year_end, month_end + 1, 1) - datetime.timedelta(days=1)
-
-            mask &= (series >= pd.Timestamp(start_date)) & (series <= pd.Timestamp(end_date))
-
-    elif mode == "Año":
-        years = sorted(series.dropna().dt.year.unique().tolist())
-        if not years:
-            container.write(f"No hay fechas disponibles en {label}")
-        else:
-            year_start = container.selectbox("Año inicio", years, key=f"{label}_anio_ys")
-            year_end = container.selectbox("Año fin", years, key=f"{label}_anio_ye")
-            start_date = datetime.date(year_start, 1, 1)
-            end_date = datetime.date(year_end, 12, 31)
-            mask &= (series >= pd.Timestamp(start_date)) & (series <= pd.Timestamp(end_date))
-
+    # Mostrar rango aplicado si aplica
     if start_date is not None and end_date is not None:
         container.write(f"📅 Rango aplicado en {label}: {start_date} → {end_date}")
 
     return mask
 
-# 🗓️ Widgets de filtro para Payment date y Clearance date en sidebar
-st.sidebar.markdown("### Filtros por fecha")
-mask_payment = date_filter_widget("Payment date", df["Payment date"], container=st.sidebar)
-mask_clearance = date_filter_widget("Clearance date", df["Clearance date"], container=st.sidebar)
+# -------------------------
+# Filtros en sidebar según fuente
+# -------------------------
+st.sidebar.markdown("### Filtros generales")
+
+# Columna principal Business (intentar varias variantes si es necesario)
+col_business = first_existing_column(df, ["Business", "business", "BUSINESS"])
+values_business = unique_values_for(df, col_business)
+
+# Columnas históricas (mantener para "Histórico")
+col_decl = first_existing_column(df, ["Declaration number", "DeclarationNumber", "Declaration", "Declaration No", "Declaration no"])
+col_po = first_existing_column(df, ["PO", "Po", "po"])
+col_trade = first_existing_column(df, ["Trade Flow", "TradeFlow", "Trade_Flow", "trade flow"])
+
+# Columnas específicas para "Actual"
+col_numgestion = first_existing_column(df, ["NumeroGestion", "Numero Gestion", "NúmeroGestion", "Número Gestion", "Numero_gestion"])
+col_hojaruta = first_existing_column(df, ["Numero Hoja Ruta", "NumeroHojaRuta", "Hoja Ruta", "HojaRuta", "Numero_Hoja_Ruta"])
+col_gestor = first_existing_column(df, ["Gestor", "gestor", "Manager"])
+
+# Mostrar y obtener selecciones según source_choice
+# Inicializar todas las variables de filtro como listas vacías
+f_business = f_decl = f_po = f_trade = f_numgestion = f_hojaruta = f_gestor = []
+
+# Business siempre disponible (si existe)
+if col_business:
+    f_business = st.sidebar.multiselect("Business", values_business, key=f"{source_choice}_business")
+else:
+    st.sidebar.write("Business: columna no encontrada en los datos")
+
+if source_choice == "Histórico":
+    # Mantener filtros originales sin cambios
+    if col_decl:
+        values_decl = unique_values_for(df, col_decl)
+        f_decl = st.sidebar.multiselect("Declaration Number", values_decl, key=f"{source_choice}_decl")
+    else:
+        st.sidebar.write("Declaration Number: columna no encontrada")
+
+    if col_po:
+        values_po = unique_values_for(df, col_po)
+        f_po = st.sidebar.multiselect("PO", values_po, key=f"{source_choice}_po")
+    else:
+        st.sidebar.write("PO: columna no encontrada")
+
+    if col_trade:
+        values_trade = unique_values_for(df, col_trade)
+        f_trade = st.sidebar.multiselect("Trade Flow", values_trade, key=f"{source_choice}_trade")
+    else:
+        st.sidebar.write("Trade Flow: columna no encontrada")
+
+    # Fechas: Payment date y Clearance date (si existen) — uso el widget completo
+    st.sidebar.markdown("### Filtros por fecha")
+    mask_payment = date_filter_widget("Payment date", df["Payment date"], container=st.sidebar) if "Payment date" in df.columns else pd.Series(True, index=df.index)
+    mask_clearance = date_filter_widget("Clearance date", df["Clearance date"], container=st.sidebar) if "Clearance date" in df.columns else pd.Series(True, index=df.index)
+
+else:
+    # Actual: agregar los nuevos filtros solicitados pero SIN filtros de fecha interactivos
+    if col_numgestion:
+        values_numgestion = unique_values_for(df, col_numgestion)
+        f_numgestion = st.sidebar.multiselect("NumeroGestion", values_numgestion, key=f"{source_choice}_numgestion")
+    else:
+        st.sidebar.write("NumeroGestion: columna no encontrada")
+
+    if col_hojaruta:
+        values_hojaruta = unique_values_for(df, col_hojaruta)
+        f_hojaruta = st.sidebar.multiselect("Numero Hoja Ruta", values_hojaruta, key=f"{source_choice}_hojaruta")
+    else:
+        st.sidebar.write("Numero Hoja Ruta: columna no encontrada")
+
+    if col_po:
+        values_po = unique_values_for(df, col_po)
+        f_po = st.sidebar.multiselect("PO", values_po, key=f"{source_choice}_po")
+    else:
+        st.sidebar.write("PO: columna no encontrada")
+
+    if col_decl:
+        values_decl = unique_values_for(df, col_decl)
+        f_decl = st.sidebar.multiselect("Declaration Number", values_decl, key=f"{source_choice}_decl")
+    else:
+        st.sidebar.write("Declaration Number: columna no encontrada")
+
+    if col_trade:
+        values_trade = unique_values_for(df, col_trade)
+        f_trade = st.sidebar.multiselect("Trade Flow", values_trade, key=f"{source_choice}_trade")
+    else:
+        st.sidebar.write("Trade Flow: columna no encontrada")
+
+    if col_gestor:
+        values_gestor = unique_values_for(df, col_gestor)
+        f_gestor = st.sidebar.multiselect("Especialista", values_gestor, key=f"{source_choice}_gestor")
+    else:
+        st.sidebar.write("Gestor: columna no encontrada")
+
+    # NO colocar filtros de fecha interactivos en "Actual"
+    mask_payment = pd.Series(True, index=df.index)
+    mask_clearance = pd.Series(True, index=df.index)
+
+    # Mostrar la última fecha disponible en los datos (para que quede "actualizado hasta")
+    # Tomamos la máxima fecha entre todas las columnas datetime que existan
+    date_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
+    if date_cols:
+        overall_max = pd.to_datetime(df[date_cols].max(axis=1, skipna=True).max(), errors="coerce")
+        if pd.notna(overall_max):
+            pass
+        else:
+            st.sidebar.write("No se pudo determinar la última fecha disponible")
+    else:
+        st.sidebar.write("No hay columnas de fecha para determinar última carga")
 
 # 🧮 Filtrado eficiente combinando todo
 mask = pd.Series(True, index=df.index)
-if f_business:
-    mask &= df["Business"].isin(f_business)
-if f_decl:
-    mask &= df["Declaration number"].isin(f_decl)
-if f_po:
-    mask &= df["PO"].isin(f_po)
-if f_trade:
-    mask &= df["Trade Flow"].isin(f_trade)
 
+if f_business and col_business:
+    mask &= df[col_business].isin(f_business)
+if f_decl and col_decl:
+    mask &= df[col_decl].isin(f_decl)
+if f_po and col_po:
+    mask &= df[col_po].isin(f_po)
+if f_trade and col_trade:
+    mask &= df[col_trade].isin(f_trade)
+
+# Filtros adicionales para "Actual"
+if source_choice == "Actual":
+    if f_numgestion and col_numgestion:
+        mask &= df[col_numgestion].isin(f_numgestion)
+    if f_hojaruta and col_hojaruta:
+        mask &= df[col_hojaruta].isin(f_hojaruta)
+    if f_gestor and col_gestor:
+        mask &= df[col_gestor].isin(f_gestor)
+
+# Aplicar máscaras de fechas
 mask &= mask_payment
 mask &= mask_clearance
 
 df_filtrado = df[mask]
 
+
 # 📊 Mostrar resultados
 st.write(f"Fuente: {source_choice}")
 st.write(f"Filas mostradas: {len(df_filtrado):,}")
+
+if source_choice == "Actual":
+    # --- Mostrar última actualización desde la columna 'Actualización'
+    if "Actualización" in df.columns:
+        last = pd.to_datetime(df.loc[mask, "Actualización"], errors="coerce").max()
+        if pd.notna(last):
+            st.write(f"🕒 Última actualización: {last.strftime('%Y-%m-%d %H:%M:%S')}")
+        else:
+            st.write("⚠️ No hay fechas válidas en la columna 'Actualización' para el conjunto filtrado")
+    else:
+        st.write("⚠️ Columna 'Actualización' no encontrada en los datos")
+
+elif source_choice == "Histórico":
+    # --- Mostrar última fecha de pago ---
+    if "Payment date" in df_filtrado.columns:
+        last_payment = pd.to_datetime(df_filtrado["Payment date"], errors="coerce").max()
+        if pd.notna(last_payment):
+            st.write(f"🗓️ Última actualización Historico: {last_payment.strftime('%Y-%m-%d')}")
+        else:
+            st.write("⚠️ No se encontró una fecha válida en 'Payment date'")
+    else:
+        st.write("⚠️ Columna 'Payment date' no encontrada en los datos")
+
+    # --- Mostrar fecha y hora actual como última actualización ---
+    ahora = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    st.write(f"🗓️ Última actualización Hoy: {ahora}")
+
+else:
+    # En caso de futuras fuentes
+    ahora = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    st.write(f"🗓️ Última actualización: {ahora}")
+
 st.dataframe(df_filtrado, use_container_width=True)
 
 # ⚡ Conversión a Excel optimizada
@@ -240,11 +386,13 @@ def convertir_excel(df: pd.DataFrame) -> bytes:
 # 💾 Crear archivo Excel
 excel_bytes = convertir_excel(df_filtrado)
 
+safe_name = source_choice.replace(" ", "_").lower()
 # 📥 Botón de descarga (en la página principal)
 st.download_button(
     label="⬇️ Descargar Excel",
     data=excel_bytes,
-    file_name="25historico_filtrado.xlsx",
+    file_name=f"{safe_name}_filtrado.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
 del excel_bytes  # libera memoria inmediatamente
+
